@@ -122,6 +122,42 @@ class AuditLogger:
     ) -> list[dict[str, Any]]:
         """Query audit log entries with optional filters."""
         conn = self._get_conn()
+        where, params = self._build_where(
+            action=action, scan_id=scan_id, task_id=task_id, operator=operator
+        )
+        rows = conn.execute(
+            f"SELECT * FROM audit_log WHERE {where} ORDER BY id DESC LIMIT ? OFFSET ?",
+            [*params, limit, offset],
+        ).fetchall()
+
+        return [self._row_to_dict(row) for row in rows]
+
+    def count(
+        self,
+        *,
+        action: str | None = None,
+        scan_id: str | None = None,
+        task_id: str | None = None,
+        operator: str | None = None,
+    ) -> int:
+        """Total number of entries matching the same filters as :meth:`query`."""
+        conn = self._get_conn()
+        where, params = self._build_where(
+            action=action, scan_id=scan_id, task_id=task_id, operator=operator
+        )
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM audit_log WHERE {where}", params
+        ).fetchone()
+        return int(row["n"])
+
+    @staticmethod
+    def _build_where(
+        *,
+        action: str | None,
+        scan_id: str | None,
+        task_id: str | None,
+        operator: str | None,
+    ) -> tuple[str, list[Any]]:
         conditions = []
         params: list[Any] = []
 
@@ -138,13 +174,7 @@ class AuditLogger:
             conditions.append("operator = ?")
             params.append(operator)
 
-        where = " AND ".join(conditions) if conditions else "1=1"
-        rows = conn.execute(
-            f"SELECT * FROM audit_log WHERE {where} ORDER BY id DESC LIMIT ? OFFSET ?",
-            [*params, limit, offset],
-        ).fetchall()
-
-        return [self._row_to_dict(row) for row in rows]
+        return (" AND ".join(conditions) if conditions else "1=1"), params
 
     def verify_integrity(self) -> dict[str, Any]:
         """Verify the chain hash integrity of the entire audit log.

@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from typing import Any
 
 from celery import chain, group
 
 from src.core.models import ScanScope
+from src.monitoring import scan_recorder
 from src.tasks.celery_app import BaseCodeGuardTask, app
 from src.utils.id_gen import generate_task_id
 from src.utils.logging import get_logger
@@ -61,6 +63,12 @@ def analysis_main_task(
         return {"task_id": task_id, "status": "already_completed", "cached": True}
 
     _sync_set_status(task_id, "running")
+    scan_recorder.scan_started(
+        task_id,
+        repo_url=repo_url,
+        pr_info=pr_info,
+        scan_scope="full" if scan_type == "full" else "diff",
+    )
 
     scan_scope = ScanScope.FULL if scan_type == "full" else ScanScope.DIFF
 
@@ -115,6 +123,7 @@ def preprocess_task(
     On failure: marks task as degraded, returns minimal metadata.
     """
     _sync_set_status(task_id, "running:preprocess")
+    stage_started = time.monotonic()
 
     try:
         from src.preprocess.metadata import run_preprocessing
@@ -149,6 +158,14 @@ def preprocess_task(
             task_id=task_id,
             payload={"language": metadata.get("language", "unknown")},
         )
+        scan_recorder.add_event(
+            task_id,
+            "preprocess",
+            "finished",
+            stage="preprocess",
+            duration_ms=int((time.monotonic() - stage_started) * 1000),
+            payload={"language": metadata.get("language", "unknown")},
+        )
 
         return {
             "task_id": task_id,
@@ -170,6 +187,14 @@ def preprocess_task(
             "degraded_reasons": [f"Preprocess failed: {str(exc)[:200]}"],
         }
         _sync_cache_json(f"codeguard:task:{task_id}:metadata", degraded_meta, ttl=3600)
+        scan_recorder.add_event(
+            task_id,
+            "preprocess",
+            "degraded",
+            stage="preprocess",
+            duration_ms=int((time.monotonic() - stage_started) * 1000),
+            payload={"error": str(exc)[:200]},
+        )
         return {"task_id": task_id, "status": "preprocess_degraded", "metadata": degraded_meta}
 
 
@@ -201,22 +226,48 @@ def security_chain_task(
         from src.agents.security.agent import SecurityAuditAgent
 
         security_agent = SecurityAuditAgent()
+        scan_recorder.agent_started(task_id, "security", stage="security")
         security_result = _sync_run_async(security_agent.execute(
             code_metadata=metadata,
             scan_scope=metadata.get("scan_scope", "full"),
             scan_id=task_id,
         ))
+        security_data_raw = security_result.get("data") or {}
+        scan_recorder.agent_finished(
+            task_id,
+            "security",
+            duration_ms=security_result.get("duration_ms"),
+            degraded=bool(security_result.get("degraded", False)),
+            stage="security",
+            payload={
+                "vulnerabilities": len(security_data_raw.get("vulnerabilities") or []),
+                "code_issues": len(security_data_raw.get("code_issues") or []),
+            },
+        )
 
         # Conflict Resolution Agent
         from src.agents.conflict.agent import ConflictResolutionAgent
 
         conflict_agent = ConflictResolutionAgent()
+        scan_recorder.agent_started(task_id, "conflict", stage="conflict")
         conflict_result = _sync_run_async(conflict_agent.execute(
             security_report=security_result.get("data", {}),
             code_metadata=metadata,
             task_id=task_id,
             scan_id=task_id,
         ))
+        scan_recorder.agent_finished(
+            task_id,
+            "conflict",
+            duration_ms=conflict_result.get("duration_ms"),
+            degraded=bool(conflict_result.get("degraded", False)),
+            stage="conflict",
+            payload={
+                "decisions": len(
+                    (conflict_result.get("data") or {}).get("decisions") or []
+                ),
+            },
+        )
 
         # Cache security result immediately (before migration completes)
         security_data = {
@@ -249,6 +300,13 @@ def security_chain_task(
 
     except Exception as exc:
         logger.error("security_chain_failed", task_id=task_id, error=str(exc)[:200])
+        scan_recorder.add_event(
+            task_id,
+            "security_chain",
+            "failed",
+            stage="security",
+            payload={"error": str(exc)[:200], "fail_safe": "blocking"},
+        )
         # Degrade: mark as blocking by default (fail-safe)
         degraded = {
             "security": {},
@@ -286,6 +344,7 @@ def migration_task(
     Failure does not affect security results.
     """
     if not target:
+        scan_recorder.agent_skipped(task_id, "migration", reason="no target version")
         return {"task_id": task_id, "status": "migration_skipped"}
 
     _sync_set_status(task_id, "running:migration")
@@ -296,11 +355,20 @@ def migration_task(
         from src.agents.migration.agent import MigrationAssessmentAgent
 
         agent = MigrationAssessmentAgent()
+        scan_recorder.agent_started(task_id, "migration", stage="migration")
         result = _sync_run_async(agent.execute(
             code_metadata=metadata,
             target_version=target,
             scan_id=task_id,
         ))
+        scan_recorder.agent_finished(
+            task_id,
+            "migration",
+            duration_ms=result.get("duration_ms"),
+            degraded=bool(result.get("degraded", False)),
+            stage="migration",
+            payload={"framework": (result.get("data") or {}).get("framework", "")},
+        )
 
         migration_data = result.get("data", {})
         _sync_cache_json(f"codeguard:task:{task_id}:migration", migration_data, ttl=86400)
@@ -315,6 +383,13 @@ def migration_task(
 
     except Exception as exc:
         logger.warning("migration_degraded", task_id=task_id, error=str(exc)[:200])
+        scan_recorder.agent_finished(
+            task_id,
+            "migration",
+            degraded=True,
+            stage="migration",
+            payload={"error": str(exc)[:200]},
+        )
         degraded = {"degraded": True, "degraded_reasons": [f"Migration failed: {str(exc)[:200]}"]}
         _sync_cache_json(f"codeguard:task:{task_id}:migration", degraded, ttl=3600)
         return {"task_id": task_id, "status": "migration_degraded"}
@@ -347,6 +422,7 @@ def report_aggregation_task(
         from src.storage.report_store import LocalFileReportStorage
 
         agent = ReportAggregationAgent(report_store=LocalFileReportStorage())
+        scan_recorder.agent_started(task_id, "reporter", stage="report")
         result = _sync_run_async(agent.execute(
             security_data=security_data,
             migration_data=migration_data,
@@ -357,6 +433,14 @@ def report_aggregation_task(
         ))
 
         report = result.get("data", {})
+        scan_recorder.agent_finished(
+            task_id,
+            "reporter",
+            duration_ms=result.get("duration_ms"),
+            degraded=bool(result.get("degraded", False)),
+            stage="report",
+            payload={"degraded": bool(report.get("degraded", False))},
+        )
         _sync_cache_json(f"codeguard:task:{task_id}:result", report, ttl=86400)
         _sync_set_status(task_id, "completed")
         _sync_publish(
@@ -366,6 +450,7 @@ def report_aggregation_task(
                 "blocking_count": report.get("summary", {}).get("blocking_count", 0)
             },
         )
+        scan_recorder.scan_finished(task_id, report)
 
         # Cleanup working directory
         _cleanup_task_dir(task_id)
@@ -374,6 +459,7 @@ def report_aggregation_task(
 
     except Exception as exc:
         logger.error("report_failed", task_id=task_id, error=str(exc)[:200])
+        scan_recorder.scan_failed(task_id, error=str(exc)[:200])
         _cleanup_task_dir(task_id)
         return {"task_id": task_id, "status": "report_failed", "error": str(exc)[:200]}
 

@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.api.middleware.error_handler import register_exception_handlers
 from src.api.middleware.rate_limit import RateLimitMiddleware
 from src.api.middleware.request_log import RequestLogMiddleware
-from src.api.routers import analyze, appeal, health, rules
+from src.api.routers import analyze, appeal, audit, dashboard, health, repos, rules, scans
 from src.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -90,5 +90,13 @@ def create_app() -> FastAPI:
     app.include_router(analyze.router, prefix="/api/v1", tags=["analysis"])
     app.include_router(appeal.router, prefix="/api/v1", tags=["appeal"])
     app.include_router(rules.router, prefix="/api/v1", tags=["rules"])
+
+    # Console (Vue3 dashboard) routers — read-heavy, auth via verify_console_access
+    app.include_router(repos.router, prefix="/api/v1/repos", tags=["console:repos"])
+    app.include_router(scans.router, prefix="/api/v1/scans", tags=["console:scans"])
+    app.include_router(
+        dashboard.router, prefix="/api/v1/dashboard", tags=["console:dashboard"]
+    )
+    app.include_router(audit.router, prefix="/api/v1/audit", tags=["console:audit"])
 
     return app
