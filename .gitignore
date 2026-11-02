@@ -56,6 +56,12 @@ data/
 # Temporary files from analysis
 /tmp/codeguard_*
 
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+
 # Docker
 docker-compose.override.yml
 

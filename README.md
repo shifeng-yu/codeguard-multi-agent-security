@@ -10,11 +10,12 @@
 
 **把安全分析嵌入 CI/CD：PR 提交时自动扫描漏洞与升级风险，高危直接阻断合并——不是事后报告，是风险发生点拦截。**
 
-多 Agent 编排（LangGraph）· 安全链路**零 LLM**（证据链可溯源）· 人在回路兜底 · 268 个测试全绿
+多 Agent 编排（LangGraph）· 安全链路**零 LLM**（证据链可溯源）· 人在回路兜底 · 348 个测试全绿
 
 ## 目录
 
 - [效果演示](#效果演示)
+- [Web 控制台](#web-控制台)
 - [系统架构](#系统架构)
 - [快速开始](#快速开始)
 - [CLI 参数](#cli-参数)
@@ -38,6 +39,37 @@ MERGE BLOCKED — fix the issues above before merging.
 - 完整报告自动落盘 `report.json`：每条命中含规则 ID / 文件行号 / **真实代码片段**（证据链可溯源）
 - 自举验证：用 CodeGuard 扫自身，156 文件 **13 项规则零误报**（存档 `docs/verification/self-scan-2026-08-25.json`）
 - 一分钟走读：`docs/verification/demo-guide.md`
+
+## Web 控制台
+
+`frontend/` 是配套的 Vue3 + TypeScript + ECharts 控制台，六个页面全部读真实扫描数据：
+
+| 页面 | 内容 |
+|---|---|
+| 概览 | 今日扫描 / 阻断 / 命中 CVE / 平均耗时四张卡 + 30 天趋势 + 严重级分布 |
+| 任务列表 | 分页、按仓库/状态/结论过滤，展示触发方式与分段耗时 |
+| 任务详情 | **SSE 实时**渲染四 Agent 执行链路（逐段点亮 + 耗时条）、发现项与完整报告 |
+| CVE 看板 | 严重级分布、CVE 命中趋势、高风险依赖包 Top N |
+| 仓库授权 | GitHub App 安装入口、授权列表、启停；未配置 App 时可手动登记 |
+| 审计检索 | 条件查询 + 一键重算哈希链（检测篡改） |
+
+![console-overview](docs/verification/console-overview.png)
+
+![console-scan-detail](docs/verification/console-scan-detail.png)
+
+控制台的数据来自 4 张新增 SQLite 表（`repos` / `scans` / `findings` / `agent_events`），
+由 Celery 任务在阶段边界写入；SSE 走「先回放 SQLite、再订阅 Redis」的双通道，
+刷新页面不丢链路，Redis 掉线自动降级为轮询。设计与接口清单见 [`docs/console.md`](docs/console.md)。
+
+```bash
+start-demo.bat                                   # Redis + API + Worker + 控制台
+python scripts/demo_scan.py --repo <本地仓库> --pr 42   # 跑一次真实离线扫描
+```
+
+> 代码规则扫描依赖 Semgrep（`pip install -e ".[semgrep]"`）。未安装时安全审计 Agent
+> 自动降级为「只跑 CVE」，报告里写明降级原因并按 fail-safe 全量阻断；装上后按
+> 5 条裁决规则判定：直连依赖命中 CVE、高危代码问题阻断，传递依赖默认豁免。
+> 自定义安装路径用 `CODEGUARD_SEMGREP_BIN` 指定，详见 [`docs/console.md`](docs/console.md)。
 
 ## 系统架构
 
