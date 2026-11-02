@@ -624,7 +624,14 @@ def _sync_run_async(coro):
 
 
 def _cleanup_task_dir(task_id: str) -> None:
-    """Remove the cloned repo working directory for this task."""
+    """Remove the cloned repo working directory for this task.
+
+    Best-effort by design: a temp directory that cannot be deleted (locked file
+    on Windows, antivirus handle, sandbox policy) must never fail the task or,
+    worse, terminate the worker. ``SystemExit`` is caught on purpose — some
+    filesystem guards raise it instead of ``OSError``, and Celery treats it as
+    unrecoverable.
+    """
     import shutil
     from pathlib import Path
 
@@ -633,5 +640,5 @@ def _cleanup_task_dir(task_id: str) -> None:
         if work_dir.exists():
             shutil.rmtree(str(work_dir), ignore_errors=True)
             logger.info("task_dir_cleaned", task_id=task_id, path=str(work_dir))
-    except Exception:
+    except BaseException:  # noqa: BLE001 - cleanup must never stop the worker
         logger.warning("task_dir_cleanup_failed", task_id=task_id, path=str(work_dir))
