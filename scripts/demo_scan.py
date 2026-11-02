@@ -65,15 +65,38 @@ def _git_branch(repo_path: Path) -> str:
         return "main"
 
 
+def _is_remote(value: str) -> bool:
+    """True when the argument looks like a git remote rather than a local path."""
+    return value.startswith(("http://", "https://", "git@", "ssh://")) or value.endswith(".git")
+
+
+def _remote_default_branch(url: str) -> str:
+    """Ask the remote for its default branch instead of assuming ``main``."""
+    try:
+        result = subprocess.run(
+            ["git", "ls-remote", "--symref", url, "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=25,
+        )
+        for line in result.stdout.splitlines():
+            if line.startswith("ref:") and "refs/heads/" in line:
+                return line.split("refs/heads/", 1)[1].split()[0]
+    except Exception:  # noqa: BLE001 - fall back below
+        pass
+    return "main"
+
+
 async def run_scan(args: argparse.Namespace) -> int:
     global _ACTIVE_SCAN
-    repo_path = Path(args.repo).resolve()
-    if not repo_path.exists():
+    remote = _is_remote(args.repo)
+    repo_path = None if remote else Path(args.repo).resolve()
+    if repo_path is not None and not repo_path.exists():
         print(f"ERROR: repository path not found: {repo_path}")
         return 2
 
     scan_id = f"demo-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:6]}"
-    head_sha = _git_head(repo_path)
+    head_sha = _git_head(repo_path) if repo_path is not None else ""
 
     work_dir = Path(tempfile.mkdtemp(prefix="codeguard_demo_")) / "repo"
     report_dir = Path(args.report_dir).resolve()
@@ -100,14 +123,15 @@ async def run_scan(args: argparse.Namespace) -> int:
     _ACTIVE_SCAN = scan_id
 
     started = time.monotonic()
-    print(f"[1/5] 预处理 {repo_path}")
+    print(f"[1/5] 预处理 {args.repo if remote else repo_path}")
     metadata = run_preprocessing(
-        repo_url=str(repo_path),
+        repo_url=args.repo if remote else str(repo_path),
         work_dir=work_dir,
         task_id=scan_id,
         scan_id=scan_id,
         scan_scope=ScanScope.FULL,
-        branch=args.branch or _git_branch(repo_path),
+        branch=args.branch
+        or (_git_branch(repo_path) if repo_path is not None else _remote_default_branch(args.repo)),
     )
     deps = metadata.get("dependencies", [])
     scan_recorder.add_event(
@@ -224,7 +248,7 @@ async def run_scan(args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Offline demo scan -> console tables")
-    parser.add_argument("--repo", required=True, help="Local git checkout to scan")
+    parser.add_argument("--repo", required=True, help="Local checkout path or git URL to scan")
     parser.add_argument("--name", default="", help="owner/name shown in the console")
     parser.add_argument("--pr", type=int, default=0, help="PR number (0 = manual scan)")
     parser.add_argument("--trigger", default="manual", choices=["manual", "webhook"])
