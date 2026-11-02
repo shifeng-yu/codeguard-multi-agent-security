@@ -1,6 +1,6 @@
 # CodeGuard
 
-**多 Agent 代码库安全分析平台（Multi-Agent Code Repository Security Analysis Platform）**
+**在 PR 合并前拦住高危依赖漏洞与代码缺陷的多 Agent 安全闸门**
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![CI](https://github.com/shifeng-yu/codeguard-multi-agent-security/actions/workflows/ci.yml/badge.svg)](https://github.com/shifeng-yu/codeguard-multi-agent-security/actions/workflows/ci.yml)
@@ -8,7 +8,12 @@
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![GitHub](https://img.shields.io/badge/GitHub-Repo-181717?logo=github&logoColor=white)](https://github.com/shifeng-yu/codeguard-multi-agent-security)
 
-**把安全分析嵌入 CI/CD：PR 提交时自动扫描漏洞与升级风险，高危直接阻断合并——不是事后报告，是风险发生点拦截。**
+传统 SCA 工具在事后出报告，等漏洞被发现时代码早已上线。CodeGuard 把检查前移到 PR：
+提交即触发扫描，命中高危直接阻断合并，结论回写 Check Runs 与 PR 内联评论——不是事后报告，
+是风险发生点拦截。
+
+裁决由 Semgrep 与 OSV 完成，**安全链路零 LLM**：每条结论都能回溯到规则 ID 与证据链接，
+LLM 只在迁移影响分析中做辅助，且必须通过 JSON 校验，否则降级为空结果，永不进入裁决链路。
 
 多 Agent 编排（LangGraph）· 安全链路**零 LLM**（证据链可溯源）· 人在回路兜底 · 348 个测试全绿
 
