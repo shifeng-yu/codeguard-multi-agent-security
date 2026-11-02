@@ -36,6 +36,14 @@ app = Celery(
     "codeguard",
     broker=redis_url,
     backend=result_backend,
+    # The worker starts from an empty registry. Without this list it never
+    # imports the modules that declare the tasks, so every dispatch is rejected
+    # with "Received unregistered task" even though the producer can enqueue.
+    include=[
+        "src.tasks.analysis",
+        "src.tasks.appeal",
+        "src.tasks.callbacks",
+    ],
 )
 
 app.conf.update(
@@ -115,13 +123,27 @@ class BaseCodeGuardTask(Task):
             pass
 
     def on_retry(self, exc, task_id, args, kwargs, einfo):
-        """Log retry attempts."""
+        """Log retry attempts.
+
+        Uses stdlib %-style formatting: this logger is a ``logging.Logger``,
+        which rejects keyword arguments (``logger.warning("x", task_id=...)``
+        raises TypeError and, inside Celery's error hooks, takes the worker
+        down with it).
+        """
         import logging
-        logger = logging.getLogger(__name__)
-        logger.warning("celery_task_retry", task_id=task_id, error=str(exc)[:200])
+        from contextlib import suppress
+
+        with suppress(Exception):  # logging must never kill the worker
+            logging.getLogger(__name__).warning(
+                "celery_task_retry task_id=%s error=%s", task_id, str(exc)[:200]
+            )
 
     def on_failure(self, exc, task_id, args, kwargs, einfo):
-        """Log final failure."""
+        """Log final failure. Same constraint as :meth:`on_retry`."""
         import logging
-        logger = logging.getLogger(__name__)
-        logger.error("celery_task_failed", task_id=task_id, error=str(exc)[:500])
+        from contextlib import suppress
+
+        with suppress(Exception):
+            logging.getLogger(__name__).error(
+                "celery_task_failed task_id=%s error=%s", task_id, str(exc)[:500]
+            )

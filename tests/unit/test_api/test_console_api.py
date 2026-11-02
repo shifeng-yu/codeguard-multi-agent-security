@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from src.api.deps import get_audit_logger, get_console_store
 from src.api.app import create_app
+from src.api.deps import get_audit_logger, get_console_store
 from src.storage.audit_log import AuditLogger
 from src.storage.console_db import ConsoleDatabase
 from src.storage.console_store import ConsoleStore

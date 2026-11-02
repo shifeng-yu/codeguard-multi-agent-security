@@ -16,7 +16,7 @@ import os
 import time
 from typing import Any
 
-from celery import chain, group
+from celery import chain, chord, group
 
 from src.core.models import ScanScope
 from src.monitoring import scan_recorder
@@ -81,12 +81,18 @@ def analysis_main_task(
                 scan_scope=scan_scope.value,
                 pr_info=pr_info,
             ),
-            _dispatch_parallel.s(
-                task_id=task_id,
-                target=target,
+            # Security and migration run in parallel, then the report joins them.
+            # A chord is required here: waiting on a group inside a task raises
+            # "Never call result.get() within a task" and silently breaks the
+            # chain, leaving the scan stuck in `running` with no report.
+            chord(
+                group(
+                    security_chain_task.si(task_id=task_id),
+                    migration_task.si(task_id=task_id, target=target),
+                ),
+                report_aggregation_task.si(task_id=task_id),
             ),
-            report_aggregation_task.s(task_id=task_id),
-            webhook_callback_task.s(
+            webhook_callback_task.si(
                 task_id=task_id,
                 callback_url=callback_url,
             ),
@@ -512,32 +518,6 @@ def webhook_callback_task(
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc) from None
         return {"task_id": task_id, "status": "callback_exhausted"}
-
-
-# ==================================================================
-# Helper: dispatch parallel security + migration
-# ==================================================================
-
-@app.task(
-    base=BaseCodeGuardTask,
-    bind=True,
-    soft_time_limit=120,
-)
-def _dispatch_parallel(
-    self: BaseCodeGuardTask,
-    preprocess_result: dict[str, Any],
-    task_id: str = "",
-    target: dict[str, str] | None = None,
-) -> list[Any]:
-    """Internal: run security_chain_task and migration_task in parallel."""
-    metadata = preprocess_result.get("metadata", {})
-
-    parallel_group = group(
-        security_chain_task.s(task_id=task_id, code_metadata=metadata),
-        migration_task.s(task_id=task_id, target=target, code_metadata=metadata),
-    )
-    result = parallel_group.apply_async()
-    return result.get(timeout=120)
 
 
 # ==================================================================

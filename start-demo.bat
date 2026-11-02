@@ -20,9 +20,11 @@ if errorlevel 1 (
   pause & exit /b 1
 )
 
-if "%REDIS_URL%"=="" set "REDIS_URL=redis://127.0.0.1:6379/0"
-if "%CELERY_BROKER_URL%"=="" set "CELERY_BROKER_URL=redis://127.0.0.1:6379/1"
-if "%CELERY_RESULT_BACKEND%"=="" set "CELERY_RESULT_BACKEND=redis://127.0.0.1:6379/2"
+if "%REDIS_URL%"=="" set "REDIS_URL=redis://127.0.0.1:6380/0"
+if "%CELERY_BROKER_URL%"=="" set "CELERY_BROKER_URL=redis://127.0.0.1:6380/1"
+if "%CELERY_RESULT_BACKEND%"=="" set "CELERY_RESULT_BACKEND=redis://127.0.0.1:6380/2"
+rem 6380 instead of 6379: 6379 is often taken by other local stacks
+if "%REPORT_STORAGE_DIR%"=="" set "REPORT_STORAGE_DIR=data/reports"
 if "%GITHUB_WEBHOOK_SECRET%"=="" set "GITHUB_WEBHOOK_SECRET=codeguard-demo-secret"
 
 rem 可选：Semgrep 装在自定义目录时（如 pip install --target），指给扫描器
@@ -31,7 +33,7 @@ if "%CODEGUARD_SEMGREP_BIN%"=="" if exist "D:\codeguard-semgrep\bin\semgrep.exe"
 echo [1/5] 检查 Redis ...
 docker inspect codeguard-redis >nul 2>nul
 if errorlevel 1 (
-  docker run -d --name codeguard-redis -p 6379:6379 redis:7-alpine >nul 2>nul
+  docker run -d --name codeguard-redis -p 6380:6379 redis:7-alpine >nul 2>nul
   if errorlevel 1 (
     echo       [警告] Redis 启动失败，实时链路将降级为轮询，Celery 任务不会执行
     echo       离线演示仍可用：python scripts\demo_scan.py --repo ^<本地仓库^>
@@ -44,10 +46,10 @@ if errorlevel 1 (
 )
 
 echo [2/5] 启动 API (127.0.0.1:8000) ...
-start "CodeGuard API" cmd /k "set REDIS_URL=%REDIS_URL%&& set CELERY_BROKER_URL=%CELERY_BROKER_URL%&& set CELERY_RESULT_BACKEND=%CELERY_RESULT_BACKEND%&& set GITHUB_WEBHOOK_SECRET=%GITHUB_WEBHOOK_SECRET%&& python -m uvicorn src.api.app:create_app --factory --host 127.0.0.1 --port 8000"
+start "CodeGuard API" cmd /k "set REDIS_URL=%REDIS_URL%&& set CELERY_BROKER_URL=%CELERY_BROKER_URL%&& set CELERY_RESULT_BACKEND=%CELERY_RESULT_BACKEND%&& set REPORT_STORAGE_DIR=%REPORT_STORAGE_DIR%&& set GITHUB_WEBHOOK_SECRET=%GITHUB_WEBHOOK_SECRET%&& python -m uvicorn src.api.app:create_app --factory --host 127.0.0.1 --port 8000"
 
 echo [3/5] 启动 Celery Worker ...
-start "CodeGuard Worker" cmd /k "set REDIS_URL=%REDIS_URL%&& set CELERY_BROKER_URL=%CELERY_BROKER_URL%&& set CELERY_RESULT_BACKEND=%CELERY_RESULT_BACKEND%&& python -m celery -A src.tasks.celery_app worker -P solo -Q codeguard -l info"
+start "CodeGuard Worker" cmd /k "set REDIS_URL=%REDIS_URL%&& set CELERY_BROKER_URL=%CELERY_BROKER_URL%&& set CELERY_RESULT_BACKEND=%CELERY_RESULT_BACKEND%&& set REPORT_STORAGE_DIR=%REPORT_STORAGE_DIR%&& python -m celery -A src.tasks.celery_app worker -P solo -Q codeguard -l info"
 
 echo [4/5] 等待 API 就绪 ...
 set "READY=0"

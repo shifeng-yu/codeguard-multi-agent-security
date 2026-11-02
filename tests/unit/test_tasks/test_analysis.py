@@ -90,6 +90,7 @@ class TestAsyncBridge:
         DeprecationWarning.
         """
         import asyncio
+
         from src.tasks.analysis import _sync_run_async
 
         async def double(x):
