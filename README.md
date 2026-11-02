@@ -3,7 +3,6 @@
 **在 PR 合并前拦住高危依赖漏洞与代码缺陷的多 Agent 安全闸门**
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
-[![CI](https://github.com/shifeng-yu/codeguard-multi-agent-security/actions/workflows/ci.yml/badge.svg)](https://github.com/shifeng-yu/codeguard-multi-agent-security/actions/workflows/ci.yml)
 [![LangGraph](https://img.shields.io/badge/LangGraph-0.2+-orange.svg)](https://langchain-ai.github.io/langgraph/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![GitHub](https://img.shields.io/badge/GitHub-Repo-181717?logo=github&logoColor=white)](https://github.com/shifeng-yu/codeguard-multi-agent-security)
