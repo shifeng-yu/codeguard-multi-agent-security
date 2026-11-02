@@ -3,10 +3,10 @@
 **多 Agent 代码库安全分析平台（Multi-Agent Code Repository Security Analysis Platform）**
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
-[![CI](https://github.com/yyyyyyyysf/codeguard-multi-agent-security/actions/workflows/ci.yml/badge.svg)](https://github.com/yyyyyyyysf/codeguard-multi-agent-security/actions/workflows/ci.yml)
+[![CI](https://github.com/shifeng-yu/codeguard-multi-agent-security/actions/workflows/ci.yml/badge.svg)](https://github.com/shifeng-yu/codeguard-multi-agent-security/actions/workflows/ci.yml)
 [![LangGraph](https://img.shields.io/badge/LangGraph-0.2+-orange.svg)](https://langchain-ai.github.io/langgraph/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![GitHub](https://img.shields.io/badge/GitHub-Repo-181717?logo=github&logoColor=white)](https://github.com/yyyyyyyysf/codeguard-multi-agent-security)
+[![GitHub](https://img.shields.io/badge/GitHub-Repo-181717?logo=github&logoColor=white)](https://github.com/shifeng-yu/codeguard-multi-agent-security)
 
 **把安全分析嵌入 CI/CD：PR 提交时自动扫描漏洞与升级风险，高危直接阻断合并——不是事后报告，是风险发生点拦截。**
 
@@ -153,7 +153,7 @@ flowchart TB
 
 ```bash
 # 克隆并初始化
-git clone https://github.com/yyyyyyyysf/codeguard-multi-agent-security.git
+git clone https://github.com/shifeng-yu/codeguard-multi-agent-security.git
 cd codeguard
 cp .env.example .env
 # 必填：编辑 .env，设置 CODEGUARD_API_KEY 和 GITHUB_WEBHOOK_SECRET
