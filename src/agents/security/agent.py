@@ -195,11 +195,8 @@ class SecurityAuditAgent(BaseAgent):
                 version = dep.get("version", "")
                 eco = dep.get("ecosystem", "pypi")
                 cached = cache._sqlite_lookup(name, version, eco)
-                for v in cached:
-                    v["dependency_type"] = "direct"
-                    v["blocking"] = v.get("severity") in ("critical", "high")
-                    v["file_location"] = ""
-                vulns.extend(cached)
+                for row in cached:
+                    vulns.append(_cache_row_to_vuln(row, name, version))
         except Exception:
             pass
 
@@ -254,6 +251,39 @@ class SecurityAuditAgent(BaseAgent):
                         break
 
         return deps_map
+
+
+def _cache_row_to_vuln(
+    row: dict[str, Any], package_name: str, version: str
+) -> dict[str, Any]:
+    """Convert a raw ``cve_cache`` row into the ``Vulnerability`` schema.
+
+    The degraded path reads SQLite directly, so rows still carry storage
+    columns (``id``, ``raw_json``, uppercase severities) and lack
+    ``affected_version``. Passing them straight into the model raised a
+    validation error and turned a degraded scan into a failed one.
+    """
+    from src.agents.security.cve_scanner import _normalize_cvss, _normalize_severity
+
+    severity = _normalize_severity(row.get("severity"))
+    fixed_version = row.get("fixed_version") or None
+
+    return {
+        "cve_id": row.get("cve_id", ""),
+        "package_name": row.get("package_name") or package_name,
+        "affected_version": version,
+        "affected_version_range": None,
+        "fixed_version": fixed_version,
+        "fix_available": bool(fixed_version),
+        "severity": severity.value,
+        "cvss_score": _normalize_cvss(row.get("cvss_score")),
+        "dependency_type": "direct",
+        "evidence_source": row.get("evidence_source") or "local_cache",
+        "evidence_url": row.get("evidence_url") or "",
+        "file_location": "",
+        "blocking": severity.is_blocking,
+        "description": row.get("summary") or "",
+    }
 
 
 def _is_dep_manifest(filepath: str) -> bool:

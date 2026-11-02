@@ -116,6 +116,7 @@ def run_tool_safely(
     *,
     timeout: int = SANDBOX_TIMEOUT_SECONDS,
     cwd: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> tuple[int, str, str]:
     """Convenience wrapper for running analysis tools.
 
@@ -124,6 +125,8 @@ def run_tool_safely(
         args: Command-line arguments.
         timeout: Timeout in seconds.
         cwd: Working directory.
+        env: Extra environment variables merged into the sandboxed environment.
+             Used for `--target`-installed tools that need their own PYTHONPATH.
 
     Returns:
         (returncode, stdout, stderr) tuple.
@@ -134,9 +137,12 @@ def run_tool_safely(
             [tool_name, *args],
             timeout=timeout,
             cwd=cwd,
+            env=env,
         )
         return result.returncode, result.stdout, result.stderr
     except SandboxTimeoutError:
         return -1, "", f"{tool_name} timed out after {timeout}s"
     except SandboxMemoryError:
         return -1, "", f"{tool_name} exceeded memory limit"
+    except OSError as exc:
+        return -1, "", f"{tool_name} could not be executed: {exc}"

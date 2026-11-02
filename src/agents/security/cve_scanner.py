@@ -18,6 +18,38 @@ from src.core.errors import OSVApiUnavailableError
 from src.core.models import DependencyType, Ecosystem, Severity
 from src.storage.cve_cache import CVECache
 
+# OSV/GHSA return severities in several vocabularies ("MODERATE", "IMPORTANT",
+# "LOW", ...). Mapping them keeps the stored severity truthful instead of
+# silently collapsing everything non-standard into "medium".
+_SEVERITY_ALIASES: dict[str, str] = {
+    "moderate": "medium",
+    "important": "high",
+    "negligible": "low",
+    "unknown": "medium",
+    "none": "low",
+}
+
+
+def _normalize_severity(value: Any) -> Severity:
+    """Coerce any upstream severity value into the local ``Severity`` enum."""
+    text = str(value or "").strip().lower()
+    text = _SEVERITY_ALIASES.get(text, text)
+    try:
+        return Severity(text)
+    except ValueError:
+        return Severity.MEDIUM
+
+
+def _normalize_cvss(value: Any) -> float | None:
+    """Accept floats, numeric strings and None; drop anything else."""
+    if value in (None, ""):
+        return None
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return None
+    return score if 0.0 <= score <= 10.0 else None
+
 
 class CVEScanner:
     """Dependency vulnerability scanner backed by 3-tier CVE cache.
@@ -87,17 +119,14 @@ class CVEScanner:
                 key = f"{name}@{ver}"
                 raw_results[key] = self._cache._sqlite_lookup(name, ver, eco.value)
 
-        # Normalize and classify
-        # Degraded path may leave raw_results shorter than packages; so no strict zip.
-        for (name, ver, _eco, dep_type), (_, vulns) in zip(packages, raw_results.items()):  # noqa: B905
+        # Normalize and classify. Look each package up by its own key instead of
+        # zipping with dict order: OSV omits packages it has no data for, and a
+        # positional zip would then attribute CVEs to the wrong dependency.
+        for name, ver, _eco, dep_type in packages:
+            vulns = raw_results.get(f"{name}@{ver}", [])
             for v in vulns:
-                severity_str = v.get("severity", "medium")
-                try:
-                    severity = Severity(severity_str)
-                except ValueError:
-                    severity = Severity.MEDIUM
-
-                cvss = v.get("cvss_score")
+                severity = _normalize_severity(v.get("severity"))
+                cvss = _normalize_cvss(v.get("cvss_score"))
                 is_direct = dep_type == DependencyType.DIRECT.value
 
                 # Blocking logic
@@ -118,7 +147,7 @@ class CVEScanner:
                     "fixed_version": v.get("fixed_version"),
                     "fix_available": bool(v.get("fixed_version")),
                     "severity": severity.value,
-                    "cvss_score": float(cvss) if cvss else None,
+                    "cvss_score": cvss,
                     "dependency_type": dep_type,
                     "evidence_source": v.get("evidence_source", "local_cache"),
                     "evidence_url": v.get("evidence_url", ""),

@@ -32,22 +32,60 @@ except ImportError:
     HAS_SEMGREP_SDK = False
 
 
+def _semgrep_env(binary: str) -> dict[str, str] | None:
+    """Give a ``pip install --target`` Semgrep its own package root.
+
+    Such an install has no entry in site-packages: the launcher is a stub that
+    imports ``semgrep`` from ``PYTHONPATH``. Only inject when the sibling package
+    directory really exists, so normal installs are unaffected.
+    """
+    try:
+        binary_path = Path(binary).resolve()
+        root = binary_path.parent.parent
+    except OSError:
+        return None
+    if not (root / "semgrep").is_dir():
+        return None
+
+    # The launcher re-executes `pysemgrep` from its own bin directory, and the
+    # sandbox builds a minimal PATH, so both PYTHONPATH and PATH must be given.
+    existing_pythonpath = os.environ.get("PYTHONPATH", "")
+    existing_path = os.environ.get("PATH", "")
+    return {
+        "PYTHONPATH": str(root) + (os.pathsep + existing_pythonpath if existing_pythonpath else ""),
+        "PATH": str(binary_path.parent) + (os.pathsep + existing_path if existing_path else ""),
+    }
+
+
 def _locate_semgrep() -> str:
     """Locate the semgrep executable without relying on the ambient PATH.
 
     Fallback order:
-    1. `semgrep` found on PATH (normal installs).
-    2. The interpreter's own venv Scripts dir (e.g. when CodeGuard itself is
-       run from a venv whose bin dir is not on PATH — double-click .bat, IDE
-       launch, cron). Without this, subprocess raises FileNotFoundError and
-       the scan degrades instantly.
+    1. ``CODEGUARD_SEMGREP_BIN`` (explicit override for custom installs).
+    2. `semgrep` found on PATH (normal installs).
+    3. The interpreter's own directory (virtualenv/conda env root on POSIX).
+    4. The interpreter's ``Scripts`` (Windows venv) or ``bin`` subdirectory —
+       conda base installs put console scripts in ``<prefix>/Scripts``, while
+       ``sys.executable`` lives in ``<prefix>``. Missing this made a correct
+       install look absent and silently degraded every code scan.
     """
+    override = os.getenv("CODEGUARD_SEMGREP_BIN", "").strip()
+    if override and Path(override).exists():
+        return override
+
     found = shutil.which("semgrep")
     if found:
         return found
+
     exe = "semgrep.exe" if os.name == "nt" else "semgrep"
-    candidate = Path(sys.executable).resolve().parent / exe
-    return str(candidate) if candidate.exists() else "semgrep"
+    base = Path(sys.executable).resolve().parent
+    subdir = "Scripts" if os.name == "nt" else "bin"
+
+    for candidate in (base / exe, base / subdir / exe):
+        if candidate.exists():
+            return str(candidate)
+
+    return "semgrep"
 
 
 # ------------------------------------------------------------------
@@ -123,14 +161,17 @@ class CodeScanner:
             return [], False, ""
 
         # Run Semgrep
-        if self._use_sdk:
-            issues, degraded, reason = await self._scan_with_sdk(
-                repo_path, scan_files
-            )
-        else:
-            issues, degraded, reason = await self._scan_with_cli(
-                repo_path, scan_files
-            )
+        try:
+            if self._use_sdk:
+                issues, degraded, reason = await self._scan_with_sdk(
+                    repo_path, scan_files
+                )
+            else:
+                issues, degraded, reason = await self._scan_with_cli(
+                    repo_path, scan_files
+                )
+        except Exception as exc:  # noqa: BLE001 - a scan failure must degrade, not raise
+            return [], True, f"Semgrep invocation failed: {str(exc)[:200]}"
 
         # Classify confidence and blocking
         for issue in issues:
@@ -189,6 +230,9 @@ class CodeScanner:
         if not targets:
             return [], False, ""
 
+        binary = _locate_semgrep()
+        tool_env = _semgrep_env(binary)
+
         # Use local custom rules (offline, deterministic output).
         # NOTE: `--config auto` is intentionally avoided: it downloads registry
         # rules at scan time (network-dependent) and conflicts with `--metrics off`
@@ -202,9 +246,21 @@ class CodeScanner:
             "--quiet",
         ] + targets
 
-        rc, stdout, stderr = run_tool_safely(_locate_semgrep(), args, timeout=60)
+        # A missing binary is a deployment condition, not a crash: degrade and
+        # let the rest of the security chain (CVE scan) still produce a verdict.
+        try:
+            rc, stdout, stderr = run_tool_safely(binary, args, timeout=60, env=tool_env)
+        except OSError as exc:
+            # Covers FileNotFoundError / PermissionError / WinError 87 (a bare
+            # name that resolves to nothing on Windows).
+            return [], True, f"Semgrep CLI not installed or not executable: {exc}"
 
         if rc != 0 and not stdout:
+            # rc == -1 means the sandbox could not even start the process
+            # (missing binary / bad executable); report it as a deployment
+            # problem rather than a scan failure.
+            if rc == -1:
+                return [], True, f"Semgrep CLI not installed or failed to start: {stderr[:200]}"
             # Semgrep returned non-zero with no output -> real failure
             degraded = True
             reason = f"Semgrep execution failed (rc={rc}): {stderr[:200]}"
